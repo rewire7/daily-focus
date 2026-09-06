@@ -1,0 +1,6 @@
+# OS
+Thumbs.db
+.DS_Store
+
+# 편집기
+.vscode/

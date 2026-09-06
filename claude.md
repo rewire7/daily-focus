@@ -1,0 +1,30 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## 프로젝트 개요
+
+Daily Focus는 하루 10~20개 수준의 개인 할 일을 기록·분류·추적하는 단일 사용자용 웹 앱이다. 로그인이나 서버 없이 브라우저에서 즉시 열어 쓰는 것을 목표로 한다. 상세 요구사항은 `할일관리앱_PRD.md` 참고.
+
+## 기술 제약
+
+- 외부 라이브러리, 프레임워크, 빌드 도구를 절대 사용하지 않는다.
+- HTML5 + CSS3 + Vanilla JavaScript(ES6+)만 사용한다.
+- 파일은 `index.html`, `style.css`, `app.js` 3개로만 구성한다.
+- `index.html`을 브라우저에서 더블클릭하면 별도 서버나 빌드 과정 없이 바로 실행되어야 한다.
+
+## 아키텍처 규칙
+
+- 전역 상태는 `state` 객체 하나만 유지한다.
+- 데이터 흐름은 항상 다음 순서를 따른다: 이벤트 → `state` 변경 → `saveState()` → `render()`.
+- DOM은 부분 수정하지 않는다. 목록 영역은 상태가 바뀔 때마다 항상 통째로 재렌더링한다.
+- 이벤트는 목록 컨테이너에 이벤트 위임 방식으로 한 번만 등록한다. 항목별로 개별 리스너를 달지 않는다.
+
+## 보안 규칙
+
+- 사용자 입력을 `innerHTML`로 삽입하지 않는다. 반드시 `textContent`를 사용해 XSS를 차단한다.
+
+## 코드 스타일
+
+- 주석은 한국어로 작성한다.
+- 함수는 하나의 일만 하도록 작게 유지한다.
