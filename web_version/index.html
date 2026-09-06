@@ -12,6 +12,7 @@
       <h1>📋 Daily Focus</h1>
       <div class="header-actions">
         <button type="button" id="theme-toggle-btn" class="header-btn theme-toggle-btn" aria-label="다크 모드로 전환" aria-pressed="false">🌙</button>
+        <button type="button" id="file-link-btn" class="header-btn" aria-label="파일 연결">🔗 파일 연결</button>
         <button type="button" id="export-btn" class="header-btn" aria-label="내보내기">내보내기</button>
         <button type="button" id="import-btn" class="header-btn" aria-label="가져오기">가져오기</button>
         <input type="file" id="import-file-input" accept="application/json" class="hidden" aria-label="JSON 파일 선택">
@@ -19,6 +20,7 @@
     </div>
 
     <p id="storage-warning" class="storage-warning hidden" role="alert"></p>
+    <p id="file-sync-status" class="file-sync-status hidden"></p>
 
     <div class="progress-section">
       <div

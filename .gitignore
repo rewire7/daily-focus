@@ -4,3 +4,7 @@ Thumbs.db
 
 # 편집기
 .vscode/
+
+# OneDrive 파일 동기화용 개인 데이터 (공개 저장소에 절대 커밋 금지)
+web_version/daily-focus-data.json
+web_version/*.data.json
