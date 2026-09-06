@@ -6,6 +6,12 @@ const THEME_STORAGE_KEY = 'dailyfocus.theme.v1';
 const VALID_THEMES = ['light', 'dark'];
 const UNDO_DURATION_MS = 3000;
 
+// File System Access API는 Chromium 계열(엣지/크롬)에서만 지원한다.
+const FILE_SYSTEM_API_SUPPORTED = 'showSaveFilePicker' in window;
+const FILE_HANDLE_DB_NAME = 'dailyfocus-filehandle-db';
+const FILE_HANDLE_STORE_NAME = 'handles';
+const FILE_HANDLE_KEY = 'linkedFile';
+
 const CATEGORIES = [
   { value: 'work', label: '업무', color: '#3B82F6' },
   { value: 'personal', label: '개인', color: '#10B981' },
@@ -34,6 +40,7 @@ let state = {
   },
   editingId: null, // 인라인 편집 중인 항목 id. 동시에 하나만 편집 가능하다.
   theme: 'light', // 'light' | 'dark'. 실제 초기값은 loadTheme()에서 저장된 값/시스템 설정으로 덮어써진다.
+  storageMode: 'local', // 'local' | 'file'. saveState()/loadState()가 어디를 대상으로 할지 결정한다.
 };
 
 // 삭제 취소(Undo) 대기 정보. 토스트가 떠 있는 동안만 값이 존재한다.
@@ -41,6 +48,13 @@ let pendingDelete = null;
 
 // 방금 체크 토글된 항목 id. 체크 애니메이션을 이번 렌더링에서만 재생하기 위한 임시 표시.
 let lastToggledId = null;
+
+// 연결된 파일 핸들/이름. FileSystemFileHandle은 직렬화 대상이 아니라 state 밖에 둔다.
+let linkedFileHandle = null;
+let linkedFileName = null;
+
+// 재연결 대기 중(권한 재승인 필요) 상태에서만 값이 존재한다.
+let pendingReconnectHandle = null;
 
 // ===== id 생성 =====
 // 생성시각 + 랜덤 4자리 문자열로 고유 id를 만든다.
@@ -84,18 +98,29 @@ function loadState() {
   }
 }
 
-// state → localStorage 저장. 실패(용량 초과, 시크릿 모드 등) 시에도 앱은 계속 동작하되 사용자에게 배너로 알린다.
-function saveState() {
+// state → 현재 저장소(localStorage 또는 연결된 파일)에 저장.
+// 호출부는 지금처럼 await 없이 saveState()만 호출한다(fire-and-forget). 실패해도 이 함수 안에서 배너로 알린다.
+async function saveState() {
+  const payload = {
+    version: STORAGE_VERSION,
+    todos: state.todos,
+  };
+  const json = JSON.stringify(payload);
+
   try {
-    const payload = {
-      version: STORAGE_VERSION,
-      todos: state.todos,
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    if (state.storageMode === 'file' && linkedFileHandle) {
+      await writeToLinkedFile(json);
+    } else {
+      localStorage.setItem(STORAGE_KEY, json);
+    }
     hideStorageWarning();
   } catch (err) {
     console.error('데이터를 저장하지 못했습니다.', err);
-    showStorageWarning('저장 공간이 가득 찼거나 접근할 수 없어 변경사항이 저장되지 않았습니다.');
+    const message =
+      state.storageMode === 'file'
+        ? '연결된 파일에 저장하지 못했습니다. OneDrive 동기화 상태를 확인해주세요.'
+        : '저장 공간이 가득 찼거나 접근할 수 없어 변경사항이 저장되지 않았습니다.';
+    showStorageWarning(message);
   }
 }
 
@@ -126,6 +151,240 @@ function saveFilters() {
     console.error('필터를 저장하지 못했습니다.', err);
     showStorageWarning('저장 공간이 가득 찼거나 접근할 수 없어 필터 설정이 저장되지 않았습니다.');
   }
+}
+
+// ===== 파일 동기화 (File System Access API) =====
+// FileSystemFileHandle은 구조화 복제가 가능해 IndexedDB에 그대로 저장할 수 있다.
+// localStorage에는 객체를 저장할 수 없어, "어떤 파일에 연결했었는지" 기억하려면 IndexedDB가 필요하다.
+function openHandleDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(FILE_HANDLE_DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(FILE_HANDLE_STORE_NAME);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// 연결한 파일 핸들을 IndexedDB에 저장한다.
+async function saveFileHandleToDb(handle) {
+  const db = await openHandleDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_HANDLE_STORE_NAME, 'readwrite');
+    tx.objectStore(FILE_HANDLE_STORE_NAME).put(handle, FILE_HANDLE_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// IndexedDB에 저장된 파일 핸들을 불러온다. 없으면 null을 반환한다.
+async function loadFileHandleFromDb() {
+  const db = await openHandleDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_HANDLE_STORE_NAME, 'readonly');
+    const req = tx.objectStore(FILE_HANDLE_STORE_NAME).get(FILE_HANDLE_KEY);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// 연결 해제 시 IndexedDB에 저장된 파일 핸들을 지운다.
+async function clearFileHandleFromDb() {
+  const db = await openHandleDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_HANDLE_STORE_NAME, 'readwrite');
+    tx.objectStore(FILE_HANDLE_STORE_NAME).delete(FILE_HANDLE_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// 연결된 파일에 JSON 문자열을 덮어쓴다.
+async function writeToLinkedFile(json) {
+  const writable = await linkedFileHandle.createWritable();
+  await writable.write(json);
+  await writable.close();
+}
+
+// 연결된 파일의 내용을 읽어 파싱한다. 비어있거나 파싱 실패 시 null을 반환한다.
+async function readLinkedFile(handle) {
+  const file = await handle.getFile();
+  const text = await file.text();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.error('연결된 파일의 JSON 파싱에 실패했습니다.', err);
+    return null;
+  }
+}
+
+// 파일 모드로 전환하고 화면/상태 표시를 갱신한다.
+function activateFileMode(handle) {
+  linkedFileHandle = handle;
+  linkedFileName = handle.name;
+  state.storageMode = 'file';
+  pendingReconnectHandle = null;
+  renderFileSyncStatus();
+}
+
+// 사용자가 "파일 연결" 버튼을 눌렀을 때: 파일 선택/생성 → 기존 내용과 비교 → 연결 확정.
+async function connectFile() {
+  let handle;
+  try {
+    handle = await window.showSaveFilePicker({
+      suggestedName: 'daily-focus-data.json',
+      types: [{ description: 'JSON 파일', accept: { 'application/json': ['.json'] } }],
+    });
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.error('파일 선택 중 오류가 발생했습니다.', err);
+    }
+    return; // 사용자가 취소한 경우 포함
+  }
+
+  const parsed = await readLinkedFile(handle);
+  const hasValidFileData = parsed && Array.isArray(parsed.todos);
+
+  if (hasValidFileData && parsed.todos.length > 0) {
+    const validationError = validateImportedData(parsed);
+    const isSameAsCurrent = JSON.stringify(parsed.todos) === JSON.stringify(state.todos);
+
+    if (!validationError && !isSameAsCurrent) {
+      const useFileData = confirm(
+        `연결한 파일에 이미 ${parsed.todos.length}개의 할 일이 있습니다. 이 파일의 내용을 불러올까요?\n` +
+          `(취소하면 현재 화면의 데이터로 파일을 덮어씁니다)`
+      );
+      if (useFileData) {
+        finalizePendingDelete();
+        state.todos = parsed.todos;
+        state.editingId = null;
+      }
+    }
+  }
+
+  activateFileMode(handle);
+  await saveFileHandleToDb(handle);
+  await saveState();
+  render();
+}
+
+// "연결 해제" 버튼: 로컬 모드로 되돌리고 현재 데이터를 localStorage에 즉시 저장한다.
+async function disconnectFile() {
+  linkedFileHandle = null;
+  linkedFileName = null;
+  state.storageMode = 'local';
+  pendingReconnectHandle = null;
+  await clearFileHandleFromDb();
+  await saveState();
+  renderFileSyncStatus();
+}
+
+// 재연결 버튼: 저장돼있던 핸들에 다시 권한을 요청한다(사용자 제스처 필요).
+async function reconnectFile() {
+  if (!pendingReconnectHandle) return;
+  const handle = pendingReconnectHandle;
+
+  try {
+    const permission = await handle.requestPermission({ mode: 'readwrite' });
+    if (permission !== 'granted') return;
+  } catch (err) {
+    console.error('파일 재연결 권한 요청에 실패했습니다.', err);
+    return;
+  }
+
+  const parsed = await readLinkedFile(handle);
+  if (parsed && Array.isArray(parsed.todos)) {
+    state.todos = parsed.todos;
+  }
+  activateFileMode(handle);
+  render();
+}
+
+// 앱 시작 시 이전에 연결했던 파일이 있는지 확인하고, 가능하면 조용히 재연결한다.
+// 동기 초기 렌더링을 막지 않도록 init()에서 await 없이 호출한다(fire-and-forget).
+async function initFileSync() {
+  if (!FILE_SYSTEM_API_SUPPORTED) return;
+
+  let handle;
+  try {
+    handle = await loadFileHandleFromDb();
+  } catch (err) {
+    console.error('연결된 파일 정보를 불러오지 못했습니다.', err);
+    return;
+  }
+  if (!handle) return;
+
+  const permission = await handle.queryPermission({ mode: 'readwrite' });
+  if (permission === 'granted') {
+    const parsed = await readLinkedFile(handle);
+    if (parsed && Array.isArray(parsed.todos)) {
+      state.todos = parsed.todos;
+    }
+    activateFileMode(handle);
+    render();
+  } else {
+    pendingReconnectHandle = handle;
+    linkedFileName = handle.name;
+    renderFileSyncStatus();
+  }
+}
+
+// 파일 연결 상태를 헤더 아래 상태 문단에 표시한다(연결됨 / 재연결 필요 / 숨김).
+// innerHTML을 쓰지 않고 요소 생성 + textContent만 사용해 XSS를 차단한다.
+function renderFileSyncStatus() {
+  const statusEl = document.getElementById('file-sync-status');
+  statusEl.textContent = '';
+
+  if (state.storageMode === 'file' && linkedFileHandle) {
+    const textEl = document.createElement('span');
+    textEl.textContent = `🔗 연결됨: ${linkedFileName}`;
+    statusEl.appendChild(textEl);
+
+    const disconnectBtnEl = document.createElement('button');
+    disconnectBtnEl.type = 'button';
+    disconnectBtnEl.className = 'file-sync-action-btn';
+    disconnectBtnEl.textContent = '연결 해제';
+    disconnectBtnEl.dataset.action = 'disconnect-file';
+    statusEl.appendChild(disconnectBtnEl);
+
+    statusEl.classList.remove('hidden');
+  } else if (pendingReconnectHandle) {
+    const textEl = document.createElement('span');
+    textEl.textContent = `🔗 연결된 파일(${linkedFileName}) 재연결이 필요합니다`;
+    statusEl.appendChild(textEl);
+
+    const reconnectBtnEl = document.createElement('button');
+    reconnectBtnEl.type = 'button';
+    reconnectBtnEl.className = 'file-sync-action-btn';
+    reconnectBtnEl.textContent = '재연결';
+    reconnectBtnEl.dataset.action = 'reconnect-file';
+    statusEl.appendChild(reconnectBtnEl);
+
+    statusEl.classList.remove('hidden');
+  } else {
+    statusEl.classList.add('hidden');
+  }
+}
+
+// 파일 연결/해제/재연결 버튼의 이벤트를 연결한다.
+function setupFileSyncEvents() {
+  if (!FILE_SYSTEM_API_SUPPORTED) {
+    document.getElementById('file-link-btn').classList.add('hidden');
+    return;
+  }
+
+  document.getElementById('file-link-btn').addEventListener('click', connectFile);
+
+  document.getElementById('file-sync-status').addEventListener('click', (event) => {
+    const btnEl = event.target.closest('[data-action]');
+    if (!btnEl) return;
+
+    if (btnEl.dataset.action === 'disconnect-file') {
+      disconnectFile();
+    } else if (btnEl.dataset.action === 'reconnect-file') {
+      reconnectFile();
+    }
+  });
 }
 
 // ===== 다크 모드 =====
@@ -893,6 +1152,7 @@ function setupEvents() {
   setupFilterEvents();
   setupImportExportEvents();
   setupThemeEvents();
+  setupFileSyncEvents();
 }
 
 // ===== 초기화 =====
@@ -904,6 +1164,7 @@ function init() {
   applyTheme();
   setupEvents();
   render();
+  initFileSync(); // 파일 연결 확인은 비동기라 await 없이 fire-and-forget으로 실행한다.
 }
 
 init();
