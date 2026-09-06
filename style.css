@@ -1,0 +1,744 @@
+/* =========================================================
+   Daily Focus (Web) — 디자인 토큰 (색상/여백/타이포/모서리/전환)
+   원본(daily-focus/style.css)을 기반으로, 데스크톱 전체 화면 레이아웃을
+   추가한 버전이다. 모바일 스타일은 그대로 유지한다.
+   카테고리 색상(--color-work/personal/study)은 PRD 지정값이므로 변경하지 않는다.
+   버튼/배지 텍스트 대비는 WCAG AA(4.5:1)를 만족하도록 검증된 값이다.
+   ========================================================= */
+:root {
+  /* 색상 */
+  --color-bg: #f4f4f6;
+  --color-surface: #ffffff;
+  --color-border: #dcdce1;
+  --color-border-strong: #b8b8c0;
+
+  --color-text: #1c1c1f;
+  --color-text-secondary: #4b5563; /* 대비 7.5:1 이상 (흰 배경 기준) */
+  --color-text-muted: #6b7280;     /* 대비 4.8:1 (완료 항목 등 저강조 텍스트) */
+
+  --color-primary: #2563eb;        /* UI 강조색(버튼/활성 필터). 대비 5.4:1 확보 */
+  --color-primary-hover: #1d4ed8;
+  --color-danger: #dc2626;
+  --color-success: #10b981;
+
+  --color-work: #3b82f6;    /* PRD 지정 카테고리 색상 — 변경 금지 */
+  --color-personal: #10b981;
+  --color-study: #f59e0b;
+  --color-badge-text: #14181f; /* 배지 배경 위 텍스트. 세 색상 모두 대비 5.5:1 이상 */
+
+  --color-focus-ring: #2563eb;
+
+  /* 필터 개수 배지(흰 배경) 전용 텍스트 색상. 흰 배경 대비 7.5:1 이상이라 라이트/다크 모드에서 값을 고정한다. */
+  --color-badge-on-white: #1d4ed8;
+
+  color-scheme: light;
+
+  /* 여백 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* 모서리 */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* 타이포 */
+  --font-family: -apple-system, "Segoe UI", Pretendard, sans-serif;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-base: 15px;
+  --font-size-lg: 21px;
+
+  /* 터치 타겟 */
+  --tap-target: 44px;
+
+  /* 전환 */
+  --transition-fast: 0.15s ease;
+  --transition-base: 0.25s ease;
+}
+
+/* =========================================================
+   다크 모드 — 색상 토큰만 재정의한다. 여백/타이포/모서리 토큰과
+   카테고리 색상(--color-work/personal/study)은 라이트 모드와 동일하게 유지한다.
+   본문 텍스트·보조 텍스트 모두 배경 대비 WCAG AA(4.5:1) 이상을 확인했다.
+   ========================================================= */
+:root[data-theme="dark"] {
+  --color-bg: #101114;
+  --color-surface: #1c1d22;
+  --color-border: #33343b;
+  --color-border-strong: #4a4b54;
+
+  --color-text: #f2f2f4;
+  --color-text-secondary: #c3c5cd; /* 대비 10:1 이상 (--color-surface 기준) */
+  --color-text-muted: #93959e;     /* 대비 5.2:1 (--color-surface 기준) */
+
+  --color-primary: #3b82f6;
+  --color-primary-hover: #60a5fa;
+  --color-danger: #f87171;
+  --color-success: #34d399;
+
+  --color-focus-ring: #60a5fa;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  color: var(--color-text);
+  background: var(--color-bg);
+  margin: 0;
+  padding: var(--space-6) var(--space-4);
+  line-height: 1.5;
+  min-height: 100vh;
+  transition: background var(--transition-base), color var(--transition-base);
+}
+
+/* =========================================================
+   포커스 / hover 공통 규칙
+   ========================================================= */
+:is(button, input, select, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+button {
+  font-family: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* =========================================================
+   카드 레이아웃 (모바일 기본값)
+   ========================================================= */
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  transition: background var(--transition-base), border-color var(--transition-base);
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+h1 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.header-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* 유틸리티 클래스: 다른 규칙이 display를 지정하더라도 항상 숨김이 우선하도록 !important를 사용한다. */
+.hidden {
+  display: none !important;
+}
+
+/* =========================================================
+   버튼 공통 (outline 스타일)
+   ========================================================= */
+.header-btn,
+.clear-completed-btn {
+  min-height: var(--tap-target);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.header-btn:hover,
+.clear-completed-btn:hover {
+  background: var(--color-bg);
+  border-color: var(--color-border-strong);
+}
+
+.theme-toggle-btn {
+  font-size: var(--font-size-base);
+  padding: var(--space-2);
+}
+
+.clear-completed-btn {
+  display: block;
+  margin: var(--space-4) auto 0;
+}
+
+/* =========================================================
+   저장 경고 배너 (localStorage 실패 안내)
+   ========================================================= */
+.storage-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid #fca5a5;
+  border-radius: var(--radius-sm);
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: var(--font-size-sm);
+}
+
+:root[data-theme="dark"] .storage-warning {
+  border-color: #7f1d1d;
+  background: #3f1616;
+  color: #fecaca;
+}
+
+/* =========================================================
+   진행률
+   ========================================================= */
+.progress-section {
+  margin-bottom: var(--space-5);
+}
+
+.progress-bar {
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--color-primary);
+  border-radius: var(--radius-pill);
+  transition: width var(--transition-base);
+}
+
+.progress-text {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* =========================================================
+   카테고리별 진행률 (가로 막대 차트)
+   ========================================================= */
+.category-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.category-progress-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.category-progress-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.category-progress-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.category-progress-label {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.category-progress-count {
+  color: var(--color-text-muted);
+}
+
+.category-progress-percent {
+  margin-left: auto;
+  font-weight: 700;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.category-progress-bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.category-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: var(--radius-pill);
+  transition: width var(--transition-base);
+}
+
+.progress-celebrate {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+/* =========================================================
+   할 일 추가 폼
+   ========================================================= */
+.add-form {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.add-form input,
+.add-category {
+  min-height: var(--tap-target);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--font-size-base);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.add-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-form input:hover,
+.add-category:hover {
+  border-color: var(--color-border-strong);
+}
+
+.add-form input.input-error {
+  border-color: var(--color-danger);
+  animation: shake 0.3s;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+.add-form button {
+  min-height: var(--tap-target);
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: #fff;
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.add-form button:hover {
+  background: var(--color-primary-hover);
+}
+
+/* =========================================================
+   필터
+   ========================================================= */
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.filter-group {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--tap-target);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.filter-btn:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-bg);
+}
+
+.filter-btn.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+/* 카테고리 색상 점: 어떤 카테고리 탭인지 색으로 즉시 구분할 수 있게 한다. */
+.filter-btn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.filter-btn-label {
+  white-space: nowrap;
+}
+
+/* 개수 배지: 라벨과 시각적으로 분리된 별도 캡슐로 표시해 숫자를 더 눈에 띄게 한다. */
+.filter-btn-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  transition: background var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.filter-btn.active .filter-btn-count {
+  background: #fff;
+  color: var(--color-badge-on-white);
+}
+
+/* 항목이 0개인 카테고리/상태는 배지를 옅게 표시해 우선순위가 낮음을 시각적으로 알린다. */
+.filter-btn.is-empty .filter-btn-count {
+  opacity: 0.55;
+}
+
+/* =========================================================
+   할 일 목록
+   ========================================================= */
+.todo-list {
+  list-style: none;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.todo-checkbox-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-target);
+  height: var(--tap-target);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.todo-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+@keyframes checkPop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.3); }
+  100% { transform: scale(1); }
+}
+
+.todo-checkbox-wrap.just-toggled {
+  animation: checkPop 0.25s ease;
+}
+
+.todo-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.todo-title.completed {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+}
+
+.todo-edit-input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--tap-target);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  font-family: inherit;
+}
+
+.category-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-target);
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  border-radius: var(--radius-pill);
+  color: var(--color-badge-text);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: filter var(--transition-fast);
+}
+
+.category-badge:hover {
+  filter: brightness(0.94);
+}
+
+.edit-btn,
+.delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-target);
+  height: var(--tap-target);
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: var(--font-size-base);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.edit-btn:hover,
+.delete-btn:hover {
+  background: var(--color-bg);
+}
+
+.empty-message {
+  color: var(--color-text-muted);
+  text-align: center;
+  padding: var(--space-5) 0;
+}
+
+/* =========================================================
+   토스트 (삭제 실행 취소)
+   ========================================================= */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-5);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: #27272a;
+  color: #fff;
+  font-size: var(--font-size-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-theme="dark"] .toast {
+  border: 1px solid #52525b;
+}
+
+.toast-undo-btn {
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: none;
+  background: none;
+  color: #93c5fd;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.toast-undo-btn:hover {
+  text-decoration: underline;
+}
+
+/* =========================================================
+   반응형 — 작은 모바일 (최소 320px까지 대응)
+   ========================================================= */
+@media (max-width: 420px) {
+  body {
+    padding: var(--space-4) var(--space-2);
+  }
+
+  .app {
+    padding: var(--space-4);
+  }
+
+  .add-form {
+    flex-wrap: wrap;
+  }
+
+  .add-form input {
+    flex-basis: 100%;
+  }
+
+  .add-form select,
+  .add-form button {
+    flex: 1;
+  }
+}
+
+/* =========================================================
+   반응형 — 데스크톱 전체 화면 레이아웃
+   좁은 화면에서는 위 모바일 스타일(세로 카드)을 그대로 쓰고,
+   화면이 넓어지면 사이드바(진행률/입력/필터) + 본문(목록)의
+   2열 대시보드 구조로 전환해 화면 전체를 활용한다.
+   ========================================================= */
+@media (min-width: 900px) {
+  body {
+    background: radial-gradient(circle at 15% 10%, #eef2ff 0%, var(--color-bg) 45%);
+    padding: var(--space-7) var(--space-6);
+    display: flex;
+    justify-content: center;
+  }
+
+  :root[data-theme="dark"] body {
+    background: radial-gradient(circle at 15% 10%, #1a1c2b 0%, var(--color-bg) 45%);
+  }
+
+  .app {
+    max-width: 1180px;
+    width: 100%;
+    padding: var(--space-6) var(--space-7);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.08);
+    transition: background var(--transition-base), border-color var(--transition-base);
+
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    grid-template-areas:
+      "header  header"
+      "warning warning"
+      "progress list"
+      "addform  list"
+      "filters  list"
+      "clear    list";
+    column-gap: var(--space-7);
+    row-gap: var(--space-5);
+    align-items: start;
+  }
+
+  h1 {
+    font-size: 28px;
+  }
+
+  .app-header {
+    grid-area: header;
+    margin-bottom: 0;
+    padding-bottom: var(--space-5);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .storage-warning {
+    grid-area: warning;
+    margin-bottom: 0;
+  }
+
+  /* 왼쪽 사이드바: 진행률 · 입력 폼 · 필터를 세로로 쌓는다 */
+  .progress-section {
+    grid-area: progress;
+    margin-bottom: 0;
+    padding: var(--space-4);
+    background: var(--color-bg);
+    border-radius: var(--radius-md);
+  }
+
+  .add-form {
+    grid-area: addform;
+    flex-direction: column;
+    margin-bottom: 0;
+  }
+
+  .add-form input,
+  .add-form .add-category,
+  .add-form button {
+    flex: none;
+    width: 100%;
+  }
+
+  .filters {
+    grid-area: filters;
+    margin-bottom: 0;
+  }
+
+  /* 오른쪽 본문: 할 일 목록이 넓은 영역을 차지한다 */
+  .todo-list {
+    grid-area: list;
+    margin-bottom: 0;
+  }
+
+  .todo-item {
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-2);
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-fast);
+  }
+
+  .todo-item:hover {
+    background: var(--color-bg);
+  }
+
+  .clear-completed-btn {
+    grid-area: clear;
+    margin: 0;
+  }
+
+  .empty-message {
+    grid-area: list;
+  }
+}

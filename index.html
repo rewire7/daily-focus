@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daily Focus</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <div class="app-header">
+      <h1>📋 Daily Focus</h1>
+      <div class="header-actions">
+        <button type="button" id="theme-toggle-btn" class="header-btn theme-toggle-btn" aria-label="다크 모드로 전환" aria-pressed="false">🌙</button>
+        <button type="button" id="export-btn" class="header-btn" aria-label="내보내기">내보내기</button>
+        <button type="button" id="import-btn" class="header-btn" aria-label="가져오기">가져오기</button>
+        <input type="file" id="import-file-input" accept="application/json" class="hidden" aria-label="JSON 파일 선택">
+      </div>
+    </div>
+
+    <p id="storage-warning" class="storage-warning hidden" role="alert"></p>
+
+    <div class="progress-section">
+      <div
+        class="progress-bar"
+        role="progressbar"
+        aria-label="전체 진행률"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="0"
+        id="progress-bar"
+      >
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+      <p id="progress-text" class="progress-text"></p>
+      <div id="category-progress-list" class="category-progress-list"></div>
+      <p id="progress-celebrate" class="progress-celebrate hidden">🎉 모든 할 일을 완료했습니다!</p>
+    </div>
+
+    <form id="add-form" class="add-form">
+      <input
+        type="text"
+        id="add-input"
+        placeholder="할 일을 입력하세요..."
+        aria-label="새 할 일 입력"
+        maxlength="200"
+        autocomplete="off"
+      >
+      <select id="add-category" class="add-category" aria-label="카테고리 선택">
+        <option value="work" selected>업무</option>
+        <option value="personal">개인</option>
+        <option value="study">공부</option>
+      </select>
+      <button type="submit" aria-label="추가">추가</button>
+    </form>
+
+    <div id="filters" class="filters">
+      <div id="category-filters" class="filter-group" data-filter-type="category">
+        <button type="button" class="filter-btn" data-value="all">전체</button>
+        <button type="button" class="filter-btn" data-value="work">업무</button>
+        <button type="button" class="filter-btn" data-value="personal">개인</button>
+        <button type="button" class="filter-btn" data-value="study">공부</button>
+      </div>
+      <div id="status-filters" class="filter-group" data-filter-type="status">
+        <button type="button" class="filter-btn" data-value="all">전체</button>
+        <button type="button" class="filter-btn" data-value="active">미완료</button>
+        <button type="button" class="filter-btn" data-value="completed">완료</button>
+      </div>
+    </div>
+
+    <ul id="todo-list" class="todo-list"></ul>
+
+    <button id="clear-completed-btn" class="clear-completed-btn" aria-label="완료된 항목 삭제">완료된 항목 삭제</button>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status">
+    <span id="toast-message" class="toast-message"></span>
+    <button id="toast-undo-btn" class="toast-undo-btn" aria-label="실행 취소">실행 취소</button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
