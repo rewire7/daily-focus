@@ -273,9 +273,18 @@ async function signIn(email, password) {
   storeSession(toSession(data));
 }
 
+// 인증 메일 링크를 누른 뒤 돌아올 주소(현재 앱 페이지)를 쿼리 문자열로 만든다.
+// 지정하지 않으면 Supabase가 브라우저의 Referer(도메인만 남은 주소)로 보내 404가 난다.
+// 파일로 직접 연 경우(file://)에는 지정하지 않고 Supabase의 Site URL을 따른다.
+function buildRedirectQuery() {
+  if (!window.location.protocol.startsWith('http')) return '';
+  const appUrl = window.location.origin + window.location.pathname;
+  return `?redirect_to=${encodeURIComponent(appUrl)}`;
+}
+
 // 회원가입한다. 이메일 인증이 꺼져 있으면 바로 로그인되어 true, 인증 메일을 보냈으면 false를 반환한다.
 async function signUp(email, password) {
-  const data = await authRequest('signup', { email, password });
+  const data = await authRequest(`signup${buildRedirectQuery()}`, { email, password });
   if (data.access_token) {
     storeSession(toSession(data));
     return true;
