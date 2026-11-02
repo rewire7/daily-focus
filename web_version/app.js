@@ -242,7 +242,7 @@ function translateAuthError(data) {
     user_already_exists: '이미 가입된 이메일입니다. 로그인해주세요.',
     weak_password: '비밀번호는 6자 이상이어야 합니다.',
     signup_disabled: '현재 신규 가입이 막혀 있습니다. 관리자에게 문의하세요.',
-    over_email_send_rate_limit: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.',
+    over_email_send_rate_limit: '이미 인증 메일을 보냈습니다. 메일함(스팸함 포함)을 확인하거나 1분 뒤 다시 시도해주세요.',
     over_request_rate_limit: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.',
   };
   return messages[code] || data.msg || data.error_description || '요청을 처리하지 못했습니다.';
