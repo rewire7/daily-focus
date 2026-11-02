@@ -24,10 +24,47 @@ const CATEGORIES = [
 const CATEGORY_ORDER = CATEGORIES.map((c) => c.value);
 
 // 제목에 아래 키워드가 포함되면 해당 카테고리로 자동 분류를 제안한다.
+// 여러 카테고리 키워드가 함께 있으면 일치한 키워드 글자 수 합이 큰 쪽, 같으면 CATEGORIES 순서(업무 우선)로 정한다.
+// '아이'처럼 다른 단어 안에 흔히 섞이는 짧은 말('아이디어')은 오분류를 막기 위해 넣지 않는다.
 const CATEGORY_KEYWORDS = {
-  work: ['회의', '보고서', '업무', '미팅', '프로젝트', '메일', '발표', '출근', '회사', '클라이언트'],
-  personal: ['운동', '병원', '장보기', '집안일', '가족', '약속', '여행', '청소', '빨래', '개인'],
-  study: ['공부', '시험', '강의', '숙제', '과제', '독서', '수업', '자격증', '스터디'],
+  work: [
+    // 일반 업무
+    '회의', '보고서', '업무', '미팅', '프로젝트', '메일', '발표', '출근', '회사', '출장', '연수',
+    // 결재·문서
+    '상신', '결재', '기안', '품의', '공문', '발송', '회신', '협조', '접수', '제출', '마감', '계획서',
+    '월간계획', '연간계획', '운영계획', '출력', '현수막', '메신저', '나이스', '에듀파인',
+    // 학사·입시
+    '신입생', '입학', '졸업', '합격자', '예비소집', '원서', '학사', '교무', '행정실', '시간표',
+    '수업', '학부모', '교직원', '감독', '출제', '성적', '행사',
+    // 예산·채용
+    '예산', '지출', '정산', '견적', '물품', '계약', '공고', '모집', '채용', '면접', '강사',
+  ],
+  personal: [
+    // 건강
+    '운동', '헬스', '산책', '등산', '병원', '치과', '약국', '건강검진', '영양제',
+    // 집안일·쇼핑
+    '장보기', '마트', '쿠팡', '택배', '반품', '집안일', '청소', '빨래', '설거지', '분리수거',
+    '세탁소', '이사', '수리', '미용실', '이발',
+    // 가족·약속
+    '가족', '부모님', '엄마', '아빠', '아내', '남편', '아들', '딸', '학원', '생일', '기념일',
+    '선물', '약속', '친구', '모임', '여행', '휴가', '예약',
+    // 생활 행정
+    '보험', '공과금', '관리비', '카드값', '세금', '연말정산', '주민센터', '세차', '주유',
+    '자동차', '차량', '개인',
+  ],
+  study: [
+    // 주식·시장
+    '주식', '투자', '종목', '매수', '매도', '손절', '익절', '분할매수', '배당', '차트', '시황',
+    '증시', '코스피', '코스닥', '나스닥', '미장', '국장', 'S&P', '시가총액', '공시', '재무제표',
+    '밸류에이션', '어닝', '실적발표', '컨센서스', '목표주가', '애널리스트',
+    // 상품·계좌
+    'ETF', '리츠', '채권', '펀드', '증권', '계좌', 'ISA', 'IRP', '연금저축', '포트폴리오',
+    '리밸런싱', '비트코인', '코인', '달러', '환율',
+    // 거시경제
+    '금리', '연준', 'FOMC', 'CPI', '물가', '경제', '경기침체',
+    // 일반 공부
+    '공부', '강의', '독서', '자격증', '스터디',
+  ],
 };
 
 const VALID_CATEGORY_FILTERS = ['all', ...CATEGORY_ORDER];
@@ -81,13 +118,21 @@ function getCategoryInfo(value) {
 // 제목에 포함된 키워드를 기준으로 카테고리를 추정한다. 일치하는 키워드가 없으면 null을 반환한다.
 function detectCategoryByKeyword(title) {
   const lowerTitle = title.toLowerCase();
+  let bestCategory = null;
+  let bestScore = 0;
   for (const category of CATEGORY_ORDER) {
-    const matched = CATEGORY_KEYWORDS[category].some((keyword) =>
-      lowerTitle.includes(keyword.toLowerCase())
-    );
-    if (matched) return category;
+    // 일치한 키워드의 글자 수 합을 점수로 쓴다. 긴(구체적인) 키워드가 이기도록 하기 위함이다.
+    // 예: '실적발표'는 공부 '실적발표'(4)가 업무 '발표'(2)보다 높아 공부로 분류된다.
+    const score = CATEGORY_KEYWORDS[category]
+      .filter((keyword) => lowerTitle.includes(keyword.toLowerCase()))
+      .reduce((sum, keyword) => sum + keyword.length, 0);
+    // 같은 점수면 앞선 카테고리를 유지하므로 동점일 때는 업무가 우선한다.
+    if (score > bestScore) {
+      bestCategory = category;
+      bestScore = score;
+    }
   }
-  return null;
+  return bestCategory;
 }
 
 // ===== 기기 캐시 (localStorage) =====
@@ -1226,19 +1271,19 @@ function setupAddFormEvents() {
   const categorySelectEl = document.getElementById('add-category');
 
   // 사용자가 카테고리를 직접 바꾸면, 자동 분류가 그 선택을 덮어쓰지 않도록 막는다.
+  // 직접 고른 카테고리는 키워드가 없을 때의 기본값이 되어 같은 카테고리 연속 입력에 쓰인다.
   let isCategoryManuallySet = false;
+  let fallbackCategory = 'work';
   categorySelectEl.addEventListener('change', () => {
     isCategoryManuallySet = true;
+    fallbackCategory = categorySelectEl.value;
   });
 
-  // 입력하는 동안 키워드가 감지되면 카테고리를 자동으로 맞춰준다.
+  // 입력하는 동안 키워드를 감지해 카테고리를 맞춘다. 키워드가 없으면 기본값으로 되돌린다.
+  // (직전 항목의 자동 분류 결과가 다음 항목에 남아 잘못 저장되는 것을 막는다)
   inputEl.addEventListener('input', () => {
     if (isCategoryManuallySet) return;
-
-    const detected = detectCategoryByKeyword(inputEl.value);
-    if (detected) {
-      categorySelectEl.value = detected;
-    }
+    categorySelectEl.value = detectCategoryByKeyword(inputEl.value) || fallbackCategory;
   });
 
   formEl.addEventListener('submit', (event) => {
@@ -1254,7 +1299,7 @@ function setupAddFormEvents() {
     inputEl.value = '';
     inputEl.focus();
     isCategoryManuallySet = false; // 다음 입력을 위해 자동 분류를 다시 활성화한다.
-    // categorySelectEl 값은 초기화하지 않는다 → 같은 카테고리 연속 입력 대응
+    categorySelectEl.value = fallbackCategory; // 직접 고른 카테고리가 있으면 유지, 없으면 업무
   });
 }
 
