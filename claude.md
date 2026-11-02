@@ -4,14 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 프로젝트 개요
 
-Daily Focus는 하루 10~20개 수준의 개인 할 일을 기록·분류·추적하는 단일 사용자용 웹 앱이다. 로그인이나 서버 없이 브라우저에서 즉시 열어 쓰는 것을 목표로 한다. 상세 요구사항은 `할일관리앱_PRD.md` 참고.
+Daily Focus는 하루 10~20개 수준의 개인 할 일을 기록·분류·추적하는 웹 앱이다. 별도 서버나 빌드 없이 브라우저에서 바로 열어 쓰고, 로그인하면 어느 기기에서든 같은 목록이 보이는 것을 목표로 한다. 상세 요구사항은 `할일관리앱_PRD.md` 참고.
+
+현재 주력 버전은 `web_version/`이며, GitHub Pages(`gh-pages` 브랜치 루트)에 이 폴더의 3개 파일을 복사해 배포한다.
 
 ## 기술 제약
 
-- 외부 라이브러리, 프레임워크, 빌드 도구를 절대 사용하지 않는다.
+- 외부 라이브러리, 프레임워크, 빌드 도구를 절대 사용하지 않는다. (Supabase JS SDK도 쓰지 않는다)
 - HTML5 + CSS3 + Vanilla JavaScript(ES6+)만 사용한다.
-- 파일은 `index.html`, `style.css`, `app.js` 3개로만 구성한다.
+- 앱 파일은 `index.html`, `style.css`, `app.js` 3개로만 구성한다.
 - `index.html`을 브라우저에서 더블클릭하면 별도 서버나 빌드 과정 없이 바로 실행되어야 한다.
+- 데이터 저장은 Supabase(Auth + DB)를 `fetch`로 REST API를 직접 호출해서만 한다. localStorage는 기기별 캐시·화면 설정(필터, 테마)·로그인 토큰 보관용이다.
+- DB 스키마와 RLS 정책은 `supabase/schema.sql`에서 관리한다. 사용자당 `todo_docs` 1행에 `{version, todos}` JSON 전체를 저장한다.
+- `.github/workflows/supabase-keepalive.yml`이 3일마다 DB를 호출해 무료 프로젝트 일시정지(7일 미사용)를 막는다.
 
 ## 아키텍처 규칙
 
@@ -23,6 +28,8 @@ Daily Focus는 하루 10~20개 수준의 개인 할 일을 기록·분류·추�
 ## 보안 규칙
 
 - 사용자 입력을 `innerHTML`로 삽입하지 않는다. 반드시 `textContent`를 사용해 XSS를 차단한다.
+- `app.js`에는 Supabase anon(public) key만 넣는다. service_role key는 절대 코드나 저장소에 넣지 않는다.
+- 사용자 간 데이터 분리는 RLS 정책(`auth.uid() = user_id`)이 책임진다. 테이블을 추가하면 반드시 RLS를 켠다.
 
 ## 코드 스타일
 

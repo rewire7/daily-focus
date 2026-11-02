@@ -1,16 +1,20 @@
+// ===== Supabase 설정 =====
+// Supabase 대시보드 → Project Settings → API(또는 Data API) 화면에서 복사해 넣는다.
+// anon(public) key는 브라우저에 공개돼도 되는 키다. 실제 데이터 보호는 DB의 RLS 정책이 맡는다.
+const SUPABASE_URL = 'https://hsiwgiszezheoqcvnhht.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhzaXdnaXN6ZXpoZW9xY3ZuaGh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2MDkxODYsImV4cCI6MjEwOTE4NTE4Nn0.RBl8KxW1b29bgq9uLxmQ8W4TQfJ_IcF8IiacPz3tniI';
+const SUPABASE_CONFIGURED = SUPABASE_URL.startsWith('https://');
+const TODO_TABLE = 'todo_docs';
+const TOKEN_REFRESH_MARGIN_SEC = 60; // 토큰 만료 60초 전이면 미리 갱신한다.
+
 // ===== 상수 =====
-const STORAGE_KEY = 'dailyfocus.todos.v1';
+const STORAGE_KEY = 'dailyfocus.todos.v1'; // 이 기기의 임시 캐시(빠른 첫 화면 + 오프라인 대비)
 const STORAGE_VERSION = 1;
+const SESSION_STORAGE_KEY = 'dailyfocus.session.v1';
 const FILTERS_STORAGE_KEY = 'dailyfocus.filters.v1';
 const THEME_STORAGE_KEY = 'dailyfocus.theme.v1';
 const VALID_THEMES = ['light', 'dark'];
 const UNDO_DURATION_MS = 3000;
-
-// File System Access API는 Chromium 계열(엣지/크롬)에서만 지원한다.
-const FILE_SYSTEM_API_SUPPORTED = 'showSaveFilePicker' in window;
-const FILE_HANDLE_DB_NAME = 'dailyfocus-filehandle-db';
-const FILE_HANDLE_STORE_NAME = 'handles';
-const FILE_HANDLE_KEY = 'linkedFile';
 
 const CATEGORIES = [
   { value: 'work', label: '업무', color: '#3B82F6' },
@@ -40,7 +44,7 @@ let state = {
   },
   editingId: null, // 인라인 편집 중인 항목 id. 동시에 하나만 편집 가능하다.
   theme: 'light', // 'light' | 'dark'. 실제 초기값은 loadTheme()에서 저장된 값/시스템 설정으로 덮어써진다.
-  storageMode: 'local', // 'local' | 'file'. saveState()/loadState()가 어디를 대상으로 할지 결정한다.
+  user: null, // 로그인한 사용자 { id, email }. null이면 로그인 화면을 보여준다.
 };
 
 // 삭제 취소(Undo) 대기 정보. 토스트가 떠 있는 동안만 값이 존재한다.
@@ -49,12 +53,17 @@ let pendingDelete = null;
 // 방금 체크 토글된 항목 id. 체크 애니메이션을 이번 렌더링에서만 재생하기 위한 임시 표시.
 let lastToggledId = null;
 
-// 연결된 파일 핸들/이름. FileSystemFileHandle은 직렬화 대상이 아니라 state 밖에 둔다.
-let linkedFileHandle = null;
-let linkedFileName = null;
+// 로그인 토큰. 화면 상태가 아니라 통신용 비밀값이라 state 밖에 둔다.
+let session = null;
 
-// 재연결 대기 중(권한 재승인 필요) 상태에서만 값이 존재한다.
-let pendingReconnectHandle = null;
+// 토큰 갱신이 동시에 여러 번 일어나지 않도록 진행 중인 갱신 Promise를 공유한다.
+let refreshPromise = null;
+
+// 클라우드 저장을 순서대로 처리하기 위한 대기열. 늦게 시작한 저장이 먼저 끝나 덮어쓰는 일을 막는다.
+let saveQueue = Promise.resolve();
+
+// 마지막 클라우드 저장이 실패해 아직 올라가지 않은 변경이 있는지 여부.
+let hasUnsyncedChanges = false;
 
 // ===== id 생성 =====
 // 생성시각 + 랜덤 4자리 문자열로 고유 id를 만든다.
@@ -81,46 +90,78 @@ function detectCategoryByKeyword(title) {
   return null;
 }
 
-// ===== localStorage 연동 =====
-// localStorage → state 복원. 파싱 실패나 접근 불가 시 빈 배열로 시작한다.
-function loadState() {
+// ===== 기기 캐시 (localStorage) =====
+// 클라우드가 원본이고, localStorage는 빠른 첫 화면과 오프라인 대비용 사본이다.
+// 다른 사람이 같은 기기에서 로그인해도 섞이지 않도록 userId를 함께 저장한다.
+function readLocalCache() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-
+    if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed && Array.isArray(parsed.todos)) {
-      state.todos = parsed.todos;
-    }
+    return parsed && Array.isArray(parsed.todos) ? parsed : null;
   } catch (err) {
-    console.error('저장된 데이터를 불러오지 못했습니다. 빈 목록으로 시작합니다.', err);
-    state.todos = [];
+    console.error('기기에 저장된 데이터를 불러오지 못했습니다.', err);
+    return null;
   }
 }
 
-// state → 현재 저장소(localStorage 또는 연결된 파일)에 저장.
-// 호출부는 지금처럼 await 없이 saveState()만 호출한다(fire-and-forget). 실패해도 이 함수 안에서 배너로 알린다.
-async function saveState() {
-  const payload = {
-    version: STORAGE_VERSION,
-    todos: state.todos,
-  };
-  const json = JSON.stringify(payload);
+// 현재 사용자의 캐시가 있으면 state.todos로 복원한다.
+function loadCachedTodos() {
+  const cache = readLocalCache();
+  if (cache && state.user && cache.userId === state.user.id) {
+    state.todos = cache.todos;
+  }
+}
 
+// 로그인 기능 도입 이전에 이 기기에만 저장돼 있던 할 일(userId 없음)을 반환한다.
+function readLegacyLocalTodos() {
+  const cache = readLocalCache();
+  if (!cache || cache.userId) return [];
+  return validateImportedData({ version: STORAGE_VERSION, todos: cache.todos }) ? [] : cache.todos;
+}
+
+// 현재 데이터를 기기 캐시에 저장한다. 실패해도 클라우드 저장에는 영향이 없어 로그만 남긴다.
+function writeLocalCache(payload) {
   try {
-    if (state.storageMode === 'file' && linkedFileHandle) {
-      await writeToLinkedFile(json);
-    } else {
-      localStorage.setItem(STORAGE_KEY, json);
-    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...payload, userId: state.user.id }));
+  } catch (err) {
+    console.error('기기 캐시에 저장하지 못했습니다.', err);
+  }
+}
+
+// 로그아웃 시 이 기기에 남은 할 일 사본을 지운다.
+function clearLocalCache() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (err) {
+    console.error('기기 캐시를 지우지 못했습니다.', err);
+  }
+}
+
+// ===== 저장 =====
+// state → 기기 캐시 + 클라우드에 저장.
+// 호출부는 await 없이 saveState()만 호출한다(fire-and-forget). 실패해도 이 함수 안에서 배너로 알린다.
+function saveState() {
+  if (!state.user) return Promise.resolve();
+
+  // 대기열에서 기다리는 동안 state가 바뀌어도 이 시점 내용이 저장되도록 사본을 만든다.
+  const payload = JSON.parse(JSON.stringify({ version: STORAGE_VERSION, todos: state.todos }));
+  writeLocalCache(payload);
+  saveQueue = saveQueue.then(() => pushToCloud(payload));
+  return saveQueue;
+}
+
+// 클라우드에 한 번 저장을 시도하고 결과를 배너로 알린다.
+async function pushToCloud(payload) {
+  if (!state.user) return;
+  try {
+    await upsertRemoteDoc(payload);
+    hasUnsyncedChanges = false;
     hideStorageWarning();
   } catch (err) {
-    console.error('데이터를 저장하지 못했습니다.', err);
-    const message =
-      state.storageMode === 'file'
-        ? '연결된 파일에 저장하지 못했습니다. OneDrive 동기화 상태를 확인해주세요.'
-        : '저장 공간이 가득 찼거나 접근할 수 없어 변경사항이 저장되지 않았습니다.';
-    showStorageWarning(message);
+    console.error('클라우드에 저장하지 못했습니다.', err);
+    hasUnsyncedChanges = true;
+    showStorageWarning('클라우드에 저장하지 못했습니다. 인터넷 연결을 확인해주세요. (이 기기에는 임시 저장됨)');
   }
 }
 
@@ -142,248 +183,420 @@ function loadFilters() {
   }
 }
 
-// state.filters → localStorage 저장. 실패해도 앱은 계속 동작하되 사용자에게 배너로 알린다.
+// state.filters → localStorage 저장. 필터는 기기별 화면 설정이라 클라우드에 올리지 않는다.
 function saveFilters() {
   try {
     localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(state.filters));
-    hideStorageWarning();
   } catch (err) {
     console.error('필터를 저장하지 못했습니다.', err);
-    showStorageWarning('저장 공간이 가득 찼거나 접근할 수 없어 필터 설정이 저장되지 않았습니다.');
   }
 }
 
-// ===== 파일 동기화 (File System Access API) =====
-// FileSystemFileHandle은 구조화 복제가 가능해 IndexedDB에 그대로 저장할 수 있다.
-// localStorage에는 객체를 저장할 수 없어, "어떤 파일에 연결했었는지" 기억하려면 IndexedDB가 필요하다.
-function openHandleDb() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(FILE_HANDLE_DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(FILE_HANDLE_STORE_NAME);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-// 연결한 파일 핸들을 IndexedDB에 저장한다.
-async function saveFileHandleToDb(handle) {
-  const db = await openHandleDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(FILE_HANDLE_STORE_NAME, 'readwrite');
-    tx.objectStore(FILE_HANDLE_STORE_NAME).put(handle, FILE_HANDLE_KEY);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-// IndexedDB에 저장된 파일 핸들을 불러온다. 없으면 null을 반환한다.
-async function loadFileHandleFromDb() {
-  const db = await openHandleDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(FILE_HANDLE_STORE_NAME, 'readonly');
-    const req = tx.objectStore(FILE_HANDLE_STORE_NAME).get(FILE_HANDLE_KEY);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-// 연결 해제 시 IndexedDB에 저장된 파일 핸들을 지운다.
-async function clearFileHandleFromDb() {
-  const db = await openHandleDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(FILE_HANDLE_STORE_NAME, 'readwrite');
-    tx.objectStore(FILE_HANDLE_STORE_NAME).delete(FILE_HANDLE_KEY);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-// 연결된 파일에 JSON 문자열을 덮어쓴다.
-async function writeToLinkedFile(json) {
-  const writable = await linkedFileHandle.createWritable();
-  await writable.write(json);
-  await writable.close();
-}
-
-// 연결된 파일의 내용을 읽어 파싱한다. 비어있거나 파싱 실패 시 null을 반환한다.
-async function readLinkedFile(handle) {
-  const file = await handle.getFile();
-  const text = await file.text();
-  if (!text.trim()) return null;
+// ===== 세션 (로그인 토큰) =====
+// localStorage에 저장된 세션을 불러온다. 없거나 깨졌으면 null.
+function loadSession() {
   try {
-    return JSON.parse(text);
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && parsed.refreshToken && parsed.user ? parsed : null;
   } catch (err) {
-    console.error('연결된 파일의 JSON 파싱에 실패했습니다.', err);
+    console.error('로그인 정보를 불러오지 못했습니다.', err);
     return null;
   }
 }
 
-// 파일 모드로 전환하고 화면/상태 표시를 갱신한다.
-function activateFileMode(handle) {
-  linkedFileHandle = handle;
-  linkedFileName = handle.name;
-  state.storageMode = 'file';
-  pendingReconnectHandle = null;
-  renderFileSyncStatus();
+// 세션을 메모리·localStorage·state.user에 함께 반영한다. null이면 로그아웃 상태가 된다.
+function storeSession(newSession) {
+  session = newSession;
+  state.user = newSession ? newSession.user : null;
+  try {
+    if (newSession) {
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(newSession));
+    } else {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+  } catch (err) {
+    console.error('로그인 정보를 저장하지 못했습니다.', err);
+  }
 }
 
-// 사용자가 "파일 연결" 버튼을 눌렀을 때: 파일 선택/생성 → 기존 내용과 비교 → 연결 확정.
-async function connectFile() {
-  let handle;
+// Supabase Auth 응답을 앱에서 쓰는 세션 형태로 바꾼다.
+function toSession(data) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    expiresAt: data.expires_at || nowSec + data.expires_in,
+    user: { id: data.user.id, email: data.user.email },
+  };
+}
+
+// ===== Supabase Auth (REST) =====
+// Supabase Auth 오류 응답을 사용자에게 보여줄 한국어 문장으로 바꾼다.
+function translateAuthError(data) {
+  const code = data.error_code || data.code || data.error;
+  const messages = {
+    invalid_credentials: '이메일 또는 비밀번호가 올바르지 않습니다.',
+    invalid_grant: '이메일 또는 비밀번호가 올바르지 않습니다.',
+    email_not_confirmed: '이메일 인증이 아직 안 됐습니다. 메일함의 인증 링크를 먼저 눌러주세요.',
+    user_already_exists: '이미 가입된 이메일입니다. 로그인해주세요.',
+    weak_password: '비밀번호는 6자 이상이어야 합니다.',
+    signup_disabled: '현재 신규 가입이 막혀 있습니다. 관리자에게 문의하세요.',
+    over_email_send_rate_limit: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.',
+    over_request_rate_limit: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.',
+  };
+  return messages[code] || data.msg || data.error_description || '요청을 처리하지 못했습니다.';
+}
+
+// Supabase Auth 엔드포인트에 POST 요청을 보내고, 실패하면 한국어 메시지로 예외를 던진다.
+async function authRequest(path, body, accessToken) {
+  const headers = { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(translateAuthError(data));
+    error.status = res.status;
+    throw error;
+  }
+  return data;
+}
+
+// 이메일·비밀번호로 로그인한다.
+async function signIn(email, password) {
+  const data = await authRequest('token?grant_type=password', { email, password });
+  storeSession(toSession(data));
+}
+
+// 회원가입한다. 이메일 인증이 꺼져 있으면 바로 로그인되어 true, 인증 메일을 보냈으면 false를 반환한다.
+async function signUp(email, password) {
+  const data = await authRequest('signup', { email, password });
+  if (data.access_token) {
+    storeSession(toSession(data));
+    return true;
+  }
+  return false;
+}
+
+// refresh token으로 새 access token을 받는다. 동시에 여러 번 불려도 실제 요청은 한 번만 보낸다.
+function refreshSession() {
+  if (!refreshPromise) {
+    refreshPromise = authRequest('token?grant_type=refresh_token', { refresh_token: session.refreshToken })
+      .then((data) => storeSession(toSession(data)))
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+// 만료가 임박했으면 갱신한 뒤 사용 가능한 access token을 반환한다.
+async function getValidAccessToken() {
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (session.expiresAt - TOKEN_REFRESH_MARGIN_SEC <= nowSec) {
+    await refreshSession();
+  }
+  return session.accessToken;
+}
+
+// 이메일 인증 링크를 눌러 돌아온 경우, 주소 # 뒤에 담긴 토큰으로 바로 로그인 처리한다.
+async function consumeAuthRedirect() {
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const accessToken = params.get('access_token');
+  const refreshToken = params.get('refresh_token');
+  if (!accessToken || !refreshToken) return false;
+
+  // 토큰이 주소창·방문 기록에 남지 않도록 # 부분을 지운다.
+  history.replaceState(null, '', window.location.pathname + window.location.search);
+
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) return false;
+  const user = await res.json();
+  storeSession(
+    toSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_in: Number(params.get('expires_in')) || 3600,
+      expires_at: Number(params.get('expires_at')) || null,
+      user,
+    })
+  );
+  return true;
+}
+
+// ===== Supabase DB (REST) =====
+// 로그인 토큰을 붙여 DB REST API를 호출한다. 401이면 토큰을 한 번 갱신해 재시도한다.
+async function dbRequest(path, options = {}, isRetry = false) {
+  let token;
   try {
-    handle = await window.showSaveFilePicker({
-      suggestedName: 'daily-focus-data.json',
-      types: [{ description: 'JSON 파일', accept: { 'application/json': ['.json'] } }],
-    });
+    token = await getValidAccessToken();
   } catch (err) {
-    if (err.name !== 'AbortError') {
-      console.error('파일 선택 중 오류가 발생했습니다.', err);
-    }
-    return; // 사용자가 취소한 경우 포함
+    handleSessionExpired();
+    throw err;
   }
 
-  const parsed = await readLinkedFile(handle);
-  const hasValidFileData = parsed && Array.isArray(parsed.todos);
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...options,
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
 
-  if (hasValidFileData && parsed.todos.length > 0) {
-    const validationError = validateImportedData(parsed);
-    const isSameAsCurrent = JSON.stringify(parsed.todos) === JSON.stringify(state.todos);
-
-    if (!validationError && !isSameAsCurrent) {
-      const useFileData = confirm(
-        `연결한 파일에 이미 ${parsed.todos.length}개의 할 일이 있습니다. 이 파일의 내용을 불러올까요?\n` +
-          `(취소하면 현재 화면의 데이터로 파일을 덮어씁니다)`
-      );
-      if (useFileData) {
-        finalizePendingDelete();
-        state.todos = parsed.todos;
-        state.editingId = null;
-      }
-    }
+  if (res.status === 401 && !isRetry) {
+    session.expiresAt = 0; // 강제로 갱신하도록 만료 처리
+    return dbRequest(path, options, true);
   }
-
-  activateFileMode(handle);
-  await saveFileHandleToDb(handle);
-  await saveState();
-  render();
+  if (!res.ok) {
+    throw new Error(`DB 요청 실패 (${res.status})`);
+  }
+  return res;
 }
 
-// "연결 해제" 버튼: 로컬 모드로 되돌리고 현재 데이터를 localStorage에 즉시 저장한다.
-async function disconnectFile() {
-  linkedFileHandle = null;
-  linkedFileName = null;
-  state.storageMode = 'local';
-  pendingReconnectHandle = null;
-  await clearFileHandleFromDb();
-  await saveState();
-  renderFileSyncStatus();
+// 내 할 일 문서(사용자당 1행)를 가져온다. 아직 없으면 null.
+async function fetchRemoteDoc() {
+  const userId = encodeURIComponent(state.user.id);
+  const res = await dbRequest(`${TODO_TABLE}?select=data&user_id=eq.${userId}`);
+  const rows = await res.json();
+  return rows.length > 0 ? rows[0].data : null;
 }
 
-// 재연결 버튼: 저장돼있던 핸들에 다시 권한을 요청한다(사용자 제스처 필요).
-async function reconnectFile() {
-  if (!pendingReconnectHandle) return;
-  const handle = pendingReconnectHandle;
+// 내 할 일 문서를 통째로 저장한다(없으면 생성, 있으면 덮어쓰기).
+async function upsertRemoteDoc(payload) {
+  await dbRequest(TODO_TABLE, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ user_id: state.user.id, data: payload, updated_at: new Date().toISOString() }),
+  });
+}
 
+// ===== 로그인 이후 데이터 동기화 =====
+// 클라우드 데이터를 불러와 화면에 반영한다. 첫 로그인이면 이 기기에 있던 기존 데이터를 옮길지 묻는다.
+async function loadFromCloud() {
+  let remote;
   try {
-    const permission = await handle.requestPermission({ mode: 'readwrite' });
-    if (permission !== 'granted') return;
+    remote = await fetchRemoteDoc();
   } catch (err) {
-    console.error('파일 재연결 권한 요청에 실패했습니다.', err);
+    console.error('클라우드 데이터를 불러오지 못했습니다.', err);
+    if (state.user) {
+      showStorageWarning('클라우드에 연결하지 못해 이 기기에 저장된 사본을 보여주고 있습니다.');
+    }
     return;
   }
 
-  const parsed = await readLinkedFile(handle);
-  if (parsed && Array.isArray(parsed.todos)) {
-    state.todos = parsed.todos;
+  if (remote && !validateImportedData(remote)) {
+    state.todos = remote.todos;
+    writeLocalCache({ version: STORAGE_VERSION, todos: state.todos });
+  } else {
+    state.todos = askLegacyMigration();
+    await saveState();
   }
-  activateFileMode(handle);
+  hideStorageWarning();
   render();
 }
 
-// 앱 시작 시 이전에 연결했던 파일이 있는지 확인하고, 가능하면 조용히 재연결한다.
-// 동기 초기 렌더링을 막지 않도록 init()에서 await 없이 호출한다(fire-and-forget).
-async function initFileSync() {
-  if (!FILE_SYSTEM_API_SUPPORTED) return;
+// 로그인 기능 도입 전 이 기기에만 있던 할 일을 계정으로 옮길지 묻고, 옮길 목록을 반환한다.
+function askLegacyMigration() {
+  const legacyTodos = readLegacyLocalTodos();
+  if (legacyTodos.length === 0) return [];
 
-  let handle;
-  try {
-    handle = await loadFileHandleFromDb();
-  } catch (err) {
-    console.error('연결된 파일 정보를 불러오지 못했습니다.', err);
+  const confirmed = confirm(
+    `이 기기에 저장돼 있던 할 일 ${legacyTodos.length}개를 내 계정으로 옮길까요?\n` +
+      `(옮기면 다른 컴퓨터에서도 보입니다)`
+  );
+  return confirmed ? legacyTodos : [];
+}
+
+// 다른 기기에서 바뀐 내용을 가져온다. 창으로 돌아올 때 호출된다.
+// 편집 중이거나 삭제 취소 대기 중이면 사용자의 작업을 방해하지 않도록 건너뛴다.
+async function syncFromCloud() {
+  if (!state.user || state.editingId || pendingDelete) return;
+
+  await saveQueue;
+  if (hasUnsyncedChanges) {
+    saveState(); // 못 올린 변경이 있으면 받아오기 전에 먼저 올린다.
     return;
   }
-  if (!handle) return;
 
-  const permission = await handle.queryPermission({ mode: 'readwrite' });
-  if (permission === 'granted') {
-    const parsed = await readLinkedFile(handle);
-    if (parsed && Array.isArray(parsed.todos)) {
-      state.todos = parsed.todos;
-    }
-    activateFileMode(handle);
+  try {
+    const remote = await fetchRemoteDoc();
+    if (!remote || validateImportedData(remote)) return;
+    if (JSON.stringify(remote.todos) === JSON.stringify(state.todos)) return;
+
+    state.todos = remote.todos;
+    writeLocalCache({ version: STORAGE_VERSION, todos: state.todos });
     render();
-  } else {
-    pendingReconnectHandle = handle;
-    linkedFileName = handle.name;
-    renderFileSyncStatus();
+  } catch (err) {
+    console.error('클라우드 데이터를 다시 불러오지 못했습니다.', err);
   }
 }
 
-// 파일 연결 상태를 헤더 아래 상태 문단에 표시한다(연결됨 / 재연결 필요 / 숨김).
+// ===== 로그인 / 로그아웃 처리 =====
+// 로그인 성공 직후: 화면을 앱으로 전환하고 클라우드 데이터를 불러온다.
+async function startUserSession() {
+  state.todos = [];
+  loadCachedTodos();
+  renderAuthView();
+  render();
+  await loadFromCloud();
+}
+
+// 로그아웃: 서버 세션을 끊고 이 기기의 토큰·데이터 사본을 지운 뒤 로그인 화면으로 돌아간다.
+async function signOut() {
+  await saveQueue; // 저장 중인 변경이 있으면 끝날 때까지 기다린다.
+  if (hasUnsyncedChanges) {
+    const confirmed = confirm('아직 클라우드에 올라가지 않은 변경이 있습니다. 그래도 로그아웃할까요?');
+    if (!confirmed) return;
+  }
+
+  if (session) {
+    authRequest('logout', {}, session.accessToken).catch((err) => console.error('로그아웃 요청 실패', err));
+  }
+  resetToLoggedOut();
+}
+
+// 토큰 갱신에 실패한 경우(오래 접속하지 않았거나 다른 곳에서 로그아웃): 다시 로그인하게 한다.
+function handleSessionExpired() {
+  if (!state.user) return;
+  resetToLoggedOut();
+  showAuthMessage('로그인이 만료되었습니다. 다시 로그인해주세요.', true);
+}
+
+// 메모리·기기에 남은 사용자 데이터를 모두 지우고 로그인 화면을 보여준다.
+function resetToLoggedOut() {
+  finalizePendingDelete();
+  storeSession(null);
+  clearLocalCache();
+  state.todos = [];
+  state.editingId = null;
+  hasUnsyncedChanges = false;
+  hideStorageWarning();
+  renderAuthView();
+  render();
+}
+
+// ===== 로그인 화면 =====
+// 로그인 여부에 따라 로그인 화면과 앱 화면 중 하나만 보여주고, 계정 표시줄을 갱신한다.
 // innerHTML을 쓰지 않고 요소 생성 + textContent만 사용해 XSS를 차단한다.
-function renderFileSyncStatus() {
-  const statusEl = document.getElementById('file-sync-status');
+function renderAuthView() {
+  const isLoggedIn = Boolean(state.user);
+  document.getElementById('auth-screen').classList.toggle('hidden', isLoggedIn);
+  document.getElementById('app').classList.toggle('hidden', !isLoggedIn);
+
+  const statusEl = document.getElementById('account-status');
   statusEl.textContent = '';
+  if (!isLoggedIn) return;
 
-  if (state.storageMode === 'file' && linkedFileHandle) {
-    const textEl = document.createElement('span');
-    textEl.textContent = `🔗 연결됨: ${linkedFileName}`;
-    statusEl.appendChild(textEl);
+  const textEl = document.createElement('span');
+  textEl.textContent = `☁️ ${state.user.email} · 어느 기기에서든 같은 목록이 보입니다`;
+  statusEl.appendChild(textEl);
 
-    const disconnectBtnEl = document.createElement('button');
-    disconnectBtnEl.type = 'button';
-    disconnectBtnEl.className = 'file-sync-action-btn';
-    disconnectBtnEl.textContent = '연결 해제';
-    disconnectBtnEl.dataset.action = 'disconnect-file';
-    statusEl.appendChild(disconnectBtnEl);
+  const logoutBtnEl = document.createElement('button');
+  logoutBtnEl.type = 'button';
+  logoutBtnEl.className = 'account-action-btn';
+  logoutBtnEl.textContent = '로그아웃';
+  logoutBtnEl.dataset.action = 'logout';
+  statusEl.appendChild(logoutBtnEl);
+}
 
-    statusEl.classList.remove('hidden');
-  } else if (pendingReconnectHandle) {
-    const textEl = document.createElement('span');
-    textEl.textContent = `🔗 연결된 파일(${linkedFileName}) 재연결이 필요합니다`;
-    statusEl.appendChild(textEl);
+// 로그인 화면 아래에 안내/오류 문구를 표시한다.
+function showAuthMessage(message, isError) {
+  const messageEl = document.getElementById('auth-message');
+  messageEl.textContent = message;
+  messageEl.classList.toggle('is-error', Boolean(isError));
+  messageEl.classList.remove('hidden');
+}
 
-    const reconnectBtnEl = document.createElement('button');
-    reconnectBtnEl.type = 'button';
-    reconnectBtnEl.className = 'file-sync-action-btn';
-    reconnectBtnEl.textContent = '재연결';
-    reconnectBtnEl.dataset.action = 'reconnect-file';
-    statusEl.appendChild(reconnectBtnEl);
+// 로그인 요청이 진행 중인 동안 버튼을 잠가 중복 클릭을 막는다.
+function setAuthBusy(isBusy) {
+  document.getElementById('auth-login-btn').disabled = isBusy;
+  document.getElementById('auth-signup-btn').disabled = isBusy;
+}
 
-    statusEl.classList.remove('hidden');
-  } else {
-    statusEl.classList.add('hidden');
+// 이메일·비밀번호 입력값을 읽고 기본 형식을 검사한다. 문제가 있으면 null.
+function readAuthInputs() {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  if (!email || !password) {
+    showAuthMessage('이메일과 비밀번호를 모두 입력해주세요.', true);
+    return null;
+  }
+  if (password.length < 6) {
+    showAuthMessage('비밀번호는 6자 이상이어야 합니다.', true);
+    return null;
+  }
+  return { email, password };
+}
+
+// 로그인 버튼(폼 제출) 처리.
+async function handleLogin() {
+  const inputs = readAuthInputs();
+  if (!inputs) return;
+
+  setAuthBusy(true);
+  try {
+    await signIn(inputs.email, inputs.password);
+    document.getElementById('auth-password').value = '';
+    document.getElementById('auth-message').classList.add('hidden');
+    await startUserSession();
+  } catch (err) {
+    showAuthMessage(err.message || '로그인하지 못했습니다. 인터넷 연결을 확인해주세요.', true);
+  } finally {
+    setAuthBusy(false);
   }
 }
 
-// 파일 연결/해제/재연결 버튼의 이벤트를 연결한다.
-function setupFileSyncEvents() {
-  if (!FILE_SYSTEM_API_SUPPORTED) {
-    document.getElementById('file-link-btn').classList.add('hidden');
-    return;
-  }
+// 회원가입 버튼 처리.
+async function handleSignup() {
+  const inputs = readAuthInputs();
+  if (!inputs) return;
 
-  document.getElementById('file-link-btn').addEventListener('click', connectFile);
-
-  document.getElementById('file-sync-status').addEventListener('click', (event) => {
-    const btnEl = event.target.closest('[data-action]');
-    if (!btnEl) return;
-
-    if (btnEl.dataset.action === 'disconnect-file') {
-      disconnectFile();
-    } else if (btnEl.dataset.action === 'reconnect-file') {
-      reconnectFile();
+  setAuthBusy(true);
+  try {
+    const loggedIn = await signUp(inputs.email, inputs.password);
+    document.getElementById('auth-password').value = '';
+    if (loggedIn) {
+      document.getElementById('auth-message').classList.add('hidden');
+      await startUserSession();
+    } else {
+      showAuthMessage('인증 메일을 보냈습니다. 메일의 링크를 누른 뒤 다시 로그인해주세요.', false);
     }
+  } catch (err) {
+    showAuthMessage(err.message || '가입하지 못했습니다. 인터넷 연결을 확인해주세요.', true);
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+// 로그인 폼·회원가입·로그아웃 버튼과 창 복귀 시 동기화 이벤트를 연결한다.
+function setupAuthEvents() {
+  document.getElementById('auth-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    handleLogin();
+  });
+  document.getElementById('auth-signup-btn').addEventListener('click', handleSignup);
+
+  document.getElementById('account-status').addEventListener('click', (event) => {
+    const btnEl = event.target.closest('[data-action="logout"]');
+    if (btnEl) signOut();
+  });
+
+  // 다른 기기에서 수정한 내용을 반영하기 위해, 이 창으로 돌아올 때마다 클라우드를 다시 확인한다.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') syncFromCloud();
+  });
+  // 인터넷이 다시 연결되면 못 올린 변경을 올린다.
+  window.addEventListener('online', () => {
+    if (hasUnsyncedChanges) saveState();
   });
 }
 
@@ -434,7 +647,7 @@ function toggleTheme() {
 }
 
 // ===== 저장 실패 안내 배너 =====
-// localStorage 저장이 실패할 때만 노출하고, 다음 저장이 성공하면 자동으로 숨긴다.
+// 저장(클라우드/기기)이 실패할 때만 노출하고, 다음 저장이 성공하면 자동으로 숨긴다.
 function showStorageWarning(message) {
   const warningEl = document.getElementById('storage-warning');
   warningEl.textContent = message;
@@ -1152,19 +1365,43 @@ function setupEvents() {
   setupFilterEvents();
   setupImportExportEvents();
   setupThemeEvents();
-  setupFileSyncEvents();
+  setupAuthEvents();
 }
 
 // ===== 초기화 =====
-// 저장된 데이터·필터·테마를 복원하고 이벤트를 등록한 뒤 최초 렌더링을 수행한다.
+// 필터·테마를 복원하고 이벤트를 등록한 뒤, 로그인 상태에 맞는 화면을 보여준다.
 function init() {
-  loadState();
   loadFilters();
   loadTheme();
   applyTheme();
   setupEvents();
+
+  if (!SUPABASE_CONFIGURED) {
+    renderAuthView();
+    showAuthMessage('app.js 맨 위의 SUPABASE_URL과 SUPABASE_ANON_KEY를 먼저 입력해야 합니다.', true);
+    setAuthBusy(true);
+    return;
+  }
+
+  // 저장된 로그인 정보가 있으면 기기 캐시로 먼저 그린 뒤 클라우드 데이터로 갱신한다.
+  storeSession(loadSession());
+  loadCachedTodos();
+  renderAuthView();
   render();
-  initFileSync(); // 파일 연결 확인은 비동기라 await 없이 fire-and-forget으로 실행한다.
+  restoreSession(); // 네트워크 작업이라 await 없이 fire-and-forget으로 실행한다.
+}
+
+// 이메일 인증 링크로 돌아왔는지 확인하고, 로그인 상태면 클라우드 데이터를 불러온다.
+async function restoreSession() {
+  try {
+    if (await consumeAuthRedirect()) {
+      await startUserSession();
+      return;
+    }
+  } catch (err) {
+    console.error('인증 링크 처리에 실패했습니다.', err);
+  }
+  if (state.user) await loadFromCloud();
 }
 
 init();

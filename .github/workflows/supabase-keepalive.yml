@@ -1,0 +1,44 @@
+# Supabase 무료 프로젝트는 7일간 DB 활동이 없으면 일시정지된다.
+# 3일마다 DB에 가벼운 요청을 한 번 보내 정지되지 않게 한다.
+#
+# 필요한 저장소 Secrets (Settings → Secrets and variables → Actions → New repository secret):
+#   SUPABASE_URL       예: https://abcdefgh.supabase.co
+#   SUPABASE_ANON_KEY  Supabase 대시보드의 anon(public) key
+name: Supabase 자동 접속
+
+on:
+  schedule:
+    - cron: '0 0 */3 * *' # 3일마다 09:00(한국 시간)
+  workflow_dispatch: # Actions 탭에서 수동 실행도 가능
+
+permissions:
+  actions: write # 아래 '워크플로 비활성화 방지' 단계에 필요
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Supabase DB 호출
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::error::SUPABASE_URL / SUPABASE_ANON_KEY Secrets가 설정되지 않았습니다."
+            exit 1
+          fi
+          curl --fail --silent --show-error --retry 3 --retry-delay 10 \
+            -X POST "$SUPABASE_URL/rest/v1/rpc/keepalive" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+          echo
+          echo "Supabase 접속 성공"
+
+      # GitHub는 저장소에 60일간 커밋이 없으면 예약 워크플로를 자동으로 꺼버린다.
+      # 매번 스스로를 다시 '활성화' 처리해 꺼지지 않게 한다.
+      - name: 워크플로 비활성화 방지
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/supabase-keepalive.yml/enable"
