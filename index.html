@@ -7,12 +7,23 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app">
+  <div id="auth-screen" class="auth-screen hidden">
+    <h1>📋 Daily Focus</h1>
+    <p class="auth-desc">로그인하면 집·회사·휴대폰 어디서든 같은 할 일 목록이 보입니다.</p>
+    <form id="auth-form" class="auth-form">
+      <input type="email" id="auth-email" placeholder="이메일" aria-label="이메일" autocomplete="email" required>
+      <input type="password" id="auth-password" placeholder="비밀번호 (6자 이상)" aria-label="비밀번호" autocomplete="current-password" minlength="6" required>
+      <button type="submit" id="auth-login-btn" class="auth-primary-btn">로그인</button>
+      <button type="button" id="auth-signup-btn" class="auth-secondary-btn">처음이면 회원가입</button>
+    </form>
+    <p id="auth-message" class="auth-message hidden" role="alert"></p>
+  </div>
+
+  <div id="app" class="app hidden">
     <div class="app-header">
       <h1>📋 Daily Focus</h1>
       <div class="header-actions">
         <button type="button" id="theme-toggle-btn" class="header-btn theme-toggle-btn" aria-label="다크 모드로 전환" aria-pressed="false">🌙</button>
-        <button type="button" id="file-link-btn" class="header-btn" aria-label="파일 연결">🔗 파일 연결</button>
         <button type="button" id="export-btn" class="header-btn" aria-label="내보내기">내보내기</button>
         <button type="button" id="import-btn" class="header-btn" aria-label="가져오기">가져오기</button>
         <input type="file" id="import-file-input" accept="application/json" class="hidden" aria-label="JSON 파일 선택">
@@ -20,7 +31,7 @@
     </div>
 
     <p id="storage-warning" class="storage-warning hidden" role="alert"></p>
-    <p id="file-sync-status" class="file-sync-status hidden"></p>
+    <p id="account-status" class="account-status"></p>
 
     <div class="progress-section">
       <div
